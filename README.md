@@ -1,4 +1,4 @@
-# Offensive Security Enumeration Help
+# offsec-enum-ng
 
 Automated enumeration for OSCP exam efficiency. Handles the tedious scanning and enumeration so you can focus on exploitation.
 
@@ -72,7 +72,7 @@ sudo apt install -y wordlists seclists
 ## Installation
 
 ```bash
-git clone <repo-url> && cd offsec-enum
+git clone <repo-url> && cd offsec-enum-ng
 sudo ./setup.sh
 ```
 
@@ -82,44 +82,44 @@ sudo ./setup.sh
 
 ```bash
 # Standard full enumeration
-sudo python3 offsec_enum.py 10.10.10.10
+sudo python3 offsec-enum-ng.py 10.10.10.10
 
 # Custom output directory
-sudo python3 offsec_enum.py 10.10.10.10 -o /root/offsec/target1
+sudo python3 offsec-enum-ng.py 10.10.10.10 -o /root/offsec/target1
 ```
 
 ### Common Patterns
 
 ```bash
 # Quick scan (top 10000 TCP, skip UDP)
-sudo python3 offsec_enum.py 10.10.10.10 -q
+sudo python3 offsec-enum-ng.py 10.10.10.10 -q
 
 # Specific ports only
-sudo python3 offsec_enum.py 10.10.10.10 -p 80,443,8080
+sudo python3 offsec-enum-ng.py 10.10.10.10 -p 80,443,8080
 
 # Port range
-sudo python3 offsec_enum.py 10.10.10.10 -p 1-1000
+sudo python3 offsec-enum-ng.py 10.10.10.10 -p 1-1000
 
 # DNS zone transfers (requires domain name)
-sudo python3 offsec_enum.py 10.10.10.10 -d megacorp.local
+sudo python3 offsec-enum-ng.py 10.10.10.10 -d megacorp.local
 
 # More threads for faster enumeration
-sudo python3 offsec_enum.py 10.10.10.10 -t 5
+sudo python3 offsec-enum-ng.py 10.10.10.10 -t 5
 
 # Slow target — double all tool timeouts
-sudo python3 offsec_enum.py 10.10.10.10 --timeout-multiplier 2.0
+sudo python3 offsec-enum-ng.py 10.10.10.10 --timeout-multiplier 2.0
 
 # Resume after interruption
-sudo python3 offsec_enum.py 10.10.10.10 -o ./enum_results_10.10.10.10_20250217 --resume
+sudo python3 offsec-enum-ng.py 10.10.10.10 -o ./enum_results_10.10.10.10_20250217 --resume
 
 # Verbose logging (DEBUG level)
-sudo python3 offsec_enum.py 10.10.10.10 -v
+sudo python3 offsec-enum-ng.py 10.10.10.10 -v
 ```
 
 ### Full Command Reference
 
 ```
-usage: offsec_enum.py [-h] [-o OUTPUT] [-p PORTS] [-q] [-v] [-t THREADS]
+usage: offsec-enum-ng.py [-h] [-o OUTPUT] [-p PORTS] [-q] [-v] [-t THREADS]
                       [-d DOMAIN] [--timeout-multiplier FLOAT] [--resume]
                       target
 
@@ -232,18 +232,18 @@ Findings the engine detects automatically:
 
 ```bash
 # Fire off all targets immediately
-sudo python3 offsec_enum.py 192.168.x.10 -o target1 &
-sudo python3 offsec_enum.py 192.168.x.11 -o target2 &
-sudo python3 offsec_enum.py 192.168.x.12 -o target3 &
+sudo python3 offsec-enum-ng.py 192.168.x.10 -o target1 &
+sudo python3 offsec-enum-ng.py 192.168.x.11 -o target2 &
+sudo python3 offsec-enum-ng.py 192.168.x.12 -o target3 &
 
 # If a scan is too slow, kill and restart with quick mode
-sudo python3 offsec_enum.py 192.168.x.10 -o target1_quick -q
+sudo python3 offsec-enum-ng.py 192.168.x.10 -o target1_quick -q
 
 # If you need DNS zone transfers
-sudo python3 offsec_enum.py 192.168.x.10 -o target1 -d megacorp.local
+sudo python3 offsec-enum-ng.py 192.168.x.10 -o target1 -d megacorp.local
 
 # Interrupted? Resume without re-running completed phases
-sudo python3 offsec_enum.py 192.168.x.10 -o target1_10.10.10.10_20250217 --resume
+sudo python3 offsec-enum-ng.py 192.168.x.10 -o target1_10.10.10.10_20250217 --resume
 ```
 
 **Priority review order**: Check `REPORT.md` critical findings first → web/ and smb/ directories → snmp/ if port 161 is open → everything else.
@@ -313,7 +313,7 @@ TIMEOUT_DEFAULTS = {
 
 **Permission errors** — most scans need root for raw sockets:
 ```bash
-sudo python3 offsec_enum.py <target>
+sudo python3 offsec-enum-ng.py <target>
 ```
 
 **Missing tools** — re-run setup or install individually:
@@ -325,13 +325,13 @@ sudo apt install -y <tool-name>
 
 **Slow scans** — use quick mode or scale timeouts:
 ```bash
-sudo python3 offsec_enum.py 10.10.10.10 -q
-sudo python3 offsec_enum.py 10.10.10.10 --timeout-multiplier 0.5
+sudo python3 offsec-enum-ng.py 10.10.10.10 -q
+sudo python3 offsec-enum-ng.py 10.10.10.10 --timeout-multiplier 0.5
 ```
 
 **Resume not working** — `--resume` needs the exact output directory path (the timestamped one):
 ```bash
-sudo python3 offsec_enum.py 10.10.10.10 -o enum_results_10.10.10.10_20250217_143052 --resume
+sudo python3 offsec-enum-ng.py 10.10.10.10 -o enum_results_10.10.10.10_20250217_143052 --resume
 ```
 
 ## Exam Compliance
