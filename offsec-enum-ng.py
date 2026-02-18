@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
-OSCP Enumeration Script - NG
-Author: Custom OSCP Tool
-Description: Comprehensive enumeration automation for penetration testing
+offsec-enum-ng — Automated Enumeration for OSCP
+Comprehensive network and service enumeration for penetration testing
 """
 
 import subprocess
@@ -196,16 +195,22 @@ def parse_gobuster_results(filepath):
         return results
 
     try:
-        with open(path) as f:
+        with open(path, errors='replace') as f:
             for line in f:
                 line = line.strip()
                 if not line or line.startswith('#'):
                     continue
-                # Format: /path (Status: 200) [Size: 1234]
+                # Format (gobuster <3.6): /path (Status: 200) [Size: 1234]
+                # Format (gobuster 3.6+): /path  [Status=200, Size=1234, ...]
                 m = re.match(
                     r'^(/\S*)\s+\(Status:\s*(\d+)\)\s+\[Size:\s*(\d+)\]',
                     line,
                 )
+                if not m:
+                    m = re.match(
+                        r'^(/\S*)\s+\[Status=(\d+),\s*Size=(\d+)',
+                        line,
+                    )
                 if m:
                     entry = {
                         'path': m.group(1),
@@ -233,7 +238,7 @@ def parse_nikto_results(filepath):
         return findings
 
     try:
-        with open(path) as f:
+        with open(path, errors='replace') as f:
             for line in f:
                 line = line.strip()
                 if line.startswith('+') and 'OSVDB' in line:
@@ -282,7 +287,7 @@ def parse_smbmap_results(filepath):
         return shares
 
     try:
-        with open(path) as f:
+        with open(path, errors='replace') as f:
             for line in f:
                 line = line.strip()
                 if not line or line.startswith('-') or line.startswith('['):
@@ -331,7 +336,7 @@ def parse_snmpwalk_results(filepath):
         return result
 
     try:
-        with open(path) as f:
+        with open(path, errors='replace') as f:
             lines = f.readlines()
         if lines:
             result['has_data'] = True
@@ -455,6 +460,18 @@ class StateManager:
             for port, pi in open_ports_dict.items()
         }
 
+    def sync_failed_commands(self, failed_list):
+        """Snapshot engine's failed_commands (List[CommandResult]) into state."""
+        self.failed_commands = [
+            {
+                'command': ' '.join(cr.command),
+                'duration': round(cr.duration, 1),
+                'timed_out': cr.timed_out,
+                'stderr': cr.stderr[:500],
+            }
+            for cr in failed_list
+        ]
+
     def restore_open_ports(self):
         """Deserialize open_ports back to Dict[int, PortInfo]."""
         return {
@@ -570,7 +587,6 @@ class EnumerationEngine:
         self.domain: Optional[str] = domain
         self.timeout_multiplier = max(0.1, timeout_multiplier)
         self.open_ports: Dict[int, PortInfo] = {}
-        self.results = {}
         self.failed_commands: List[CommandResult] = []
         self._lock = threading.Lock()
 
@@ -589,11 +605,23 @@ class EnumerationEngine:
             if self.state.load():
                 self.logger.info("Resuming from checkpoint: %s", self.state.state_path)
                 self.open_ports = self.state.restore_open_ports()
+                # Restore previous run's failures so reports are cumulative
+                for fc in self.state.failed_commands:
+                    self.failed_commands.append(CommandResult(
+                        command=fc.get('command', '').split(),
+                        success=False,
+                        stdout='',
+                        stderr=fc.get('stderr', ''),
+                        duration=fc.get('duration', 0.0),
+                        timed_out=fc.get('timed_out', False),
+                    ))
                 self.logger.info(
-                    "Restored %d open port(s), %d completed phase(s), %d completed enumeration(s)",
+                    "Restored %d open port(s), %d completed phase(s), "
+                    "%d completed enumeration(s), %d failed command(s)",
                     len(self.open_ports),
                     len(self.state.completed_phases),
                     len(self.state.completed_enumerations),
+                    len(self.failed_commands),
                 )
             else:
                 self.logger.error(
@@ -645,7 +673,8 @@ class EnumerationEngine:
             result = subprocess.run(
                 command,
                 capture_output=True,
-                text=True,
+                encoding='utf-8',
+                errors='replace',
                 timeout=timeout,
             )
             elapsed = time.monotonic() - start
@@ -806,18 +835,19 @@ class EnumerationEngine:
     def parse_nmap_output(self, nmap_output):
         """Fallback: parse nmap stdout to extract open ports and services."""
         for line in nmap_output.split('\n'):
-            if '/tcp' in line and 'open' in line:
+            if 'open' in line and ('/tcp' in line or '/udp' in line):
                 parts = line.split()
-                port_str = parts[0].split('/')[0]
                 try:
-                    port = int(port_str)
+                    port_proto = parts[0].split('/')
+                    port = int(port_proto[0])
+                    protocol = port_proto[1] if len(port_proto) > 1 else 'tcp'
                     service = parts[2] if len(parts) > 2 else "unknown"
                     self.open_ports[port] = PortInfo(
-                        port=port, protocol='tcp', service=service,
+                        port=port, protocol=protocol, service=service,
                         product='', version='', tunnel='', nse_scripts={},
                     )
-                    self.logger.success("Found open port: %d/%s", port, service)
-                except ValueError:
+                    self.logger.success("Found open port: %d/%s (%s)", port, protocol, service)
+                except (ValueError, IndexError):
                     continue
 
     # ------------------------------------------------------------------
@@ -835,7 +865,7 @@ class EnumerationEngine:
         udp_output_base = str(nmap_dir / "udp_scan")
 
         udp_cmd = [
-            "sudo", "nmap", "-sU", "-sV",
+            "nmap", "-sU", "-sV",
             "--top-ports", "100",
             "-oA", udp_output_base,
             self.target,
@@ -908,6 +938,9 @@ class EnumerationEngine:
         result = self.run_command(nikto_cmd, timeout=self._timeout('nikto'))
         if result.success:
             self.logger.success("Nikto scan complete for port %d (%.1fs)", port, result.duration)
+        elif result.stderr:
+            Path(web_dir / f"nikto_{port}.stderr").write_text(
+                result.stderr, errors='replace')
 
         # Gobuster
         gobuster_output = str(web_dir / f"gobuster_{port}.txt")
@@ -925,6 +958,9 @@ class EnumerationEngine:
             result = self.run_command(gobuster_cmd, timeout=self._timeout('gobuster'))
             if result.success:
                 self.logger.success("Gobuster complete for port %d (%.1fs)", port, result.duration)
+            elif result.stderr:
+                Path(web_dir / f"gobuster_{port}.stderr").write_text(
+                    result.stderr, errors='replace')
         else:
             self.logger.warning("Wordlist not found: %s", wordlist)
 
@@ -938,6 +974,9 @@ class EnumerationEngine:
         result = self.run_command(whatweb_cmd, timeout=self._timeout('whatweb'))
         if result.success:
             self.logger.success("WhatWeb complete for port %d (%.1fs)", port, result.duration)
+        elif result.stderr:
+            Path(web_dir / f"whatweb_{port}.stderr").write_text(
+                result.stderr, errors='replace')
 
     def enumerate_smb(self, port):
         """Enumerate SMB services."""
@@ -966,7 +1005,7 @@ class EnumerationEngine:
         if result.success:
             self.logger.success("smbclient complete (%.1fs)", result.duration)
 
-        nmap_smb_output = smb_dir / "nmap_smb.txt"
+        nmap_smb_output = smb_dir / f"nmap_smb_{port}.txt"
         nmap_smb_cmd = [
             "nmap", "-p", str(port),
             "--script=smb-enum-shares,smb-enum-users,smb-os-discovery",
@@ -983,7 +1022,7 @@ class EnumerationEngine:
 
         ftp_dir = self._ensure_output_dir("ftp")
 
-        ftp_output = ftp_dir / "ftp_enum.txt"
+        ftp_output = ftp_dir / f"ftp_enum_{port}.txt"
         nmap_ftp_cmd = [
             "nmap", "-p", str(port),
             "--script=ftp-anon,ftp-bounce,ftp-syst",
@@ -1000,7 +1039,7 @@ class EnumerationEngine:
 
         misc_dir = self._ensure_output_dir("misc")
 
-        ssh_output = misc_dir / "ssh_enum.txt"
+        ssh_output = misc_dir / f"ssh_enum_{port}.txt"
         nmap_ssh_cmd = [
             "nmap", "-p", str(port),
             "--script=ssh-auth-methods,ssh-hostkey",
@@ -1017,7 +1056,7 @@ class EnumerationEngine:
 
         misc_dir = self._ensure_output_dir("misc")
 
-        mysql_output = misc_dir / "mysql_enum.txt"
+        mysql_output = misc_dir / f"mysql_enum_{port}.txt"
         nmap_mysql_cmd = [
             "nmap", "-p", str(port),
             "--script=mysql-info,mysql-databases,mysql-empty-password",
@@ -1034,7 +1073,7 @@ class EnumerationEngine:
 
         misc_dir = self._ensure_output_dir("misc")
 
-        mssql_output = misc_dir / "mssql_enum.txt"
+        mssql_output = misc_dir / f"mssql_enum_{port}.txt"
         nmap_mssql_cmd = [
             "nmap", "-p", str(port),
             "--script=ms-sql-info,ms-sql-empty-password,ms-sql-config",
@@ -1188,7 +1227,7 @@ class EnumerationEngine:
 
         nse_output = nfs_dir / "nmap_nfs.txt"
         nse_cmd = [
-            "nmap", "-p", "111",
+            "nmap", "-p", str(port),
             "--script=nfs-ls,nfs-showmount,nfs-statfs",
             self.target,
         ]
@@ -1234,7 +1273,7 @@ class EnumerationEngine:
 
         misc_dir = self._ensure_output_dir("misc")
 
-        rdp_output = misc_dir / "rdp_enum.txt"
+        rdp_output = misc_dir / f"rdp_enum_{port}.txt"
         rdp_cmd = [
             "nmap", "-p", str(port),
             "--script=rdp-enum-encryption,rdp-ntlm-info",
@@ -1322,6 +1361,12 @@ class EnumerationEngine:
 
         return tasks
 
+    # Host-level enumerators that scan the target, not a specific port.
+    # Only dispatch once regardless of how many matching ports are open.
+    _HOST_LEVEL_ENUMERATORS = frozenset({
+        'enumerate_smb', 'enumerate_snmp', 'enumerate_nfs',
+    })
+
     def enumerate_services(self):
         """Classify ports then run all enumeration tasks concurrently.
 
@@ -1329,8 +1374,16 @@ class EnumerationEngine:
         Each successful task is checkpointed via :class:`StateManager`.
         """
         tasks: List[Tuple[Callable, int]] = []
+        dispatched_host_level: Set[str] = set()
+
         for port, port_info in self.open_ports.items():
-            tasks.extend(self._classify_port(port, port_info))
+            for func, p in self._classify_port(port, port_info):
+                name = func.__name__
+                if name in self._HOST_LEVEL_ENUMERATORS:
+                    if name in dispatched_host_level:
+                        continue
+                    dispatched_host_level.add(name)
+                tasks.append((func, p))
 
         # Filter out already-completed tasks in resume mode
         if self._resume_mode:
@@ -1384,7 +1437,7 @@ class EnumerationEngine:
         # --- FTP anonymous access ---
         for port, pi in self.open_ports.items():
             if 'ftp' in pi.service.lower() or port == 21:
-                ftp_file = self.output_dir / "ftp" / "ftp_enum.txt"
+                ftp_file = self.output_dir / "ftp" / f"ftp_enum_{port}.txt"
                 ftp_data = parse_ftp_nmap(ftp_file)
                 if ftp_data['anonymous_access']:
                     findings.append(Finding(
@@ -1448,20 +1501,22 @@ class EnumerationEngine:
             ))
 
         # --- MySQL empty password ---
-        mysql_file = self.output_dir / "misc" / "mysql_enum.txt"
-        if mysql_file.exists():
-            try:
-                content = mysql_file.read_text(errors='replace')
-                if 'empty password' in content.lower() and 'root' in content.lower():
-                    findings.append(Finding(
-                        severity='CRITICAL', category='default_creds',
-                        port=3306, service='MySQL',
-                        description='MySQL root has no password.',
-                        evidence='mysql-empty-password: root has empty password',
-                        next_step=f'mysql -h {self.target} -u root',
-                    ))
-            except Exception:
-                pass
+        for port, pi in self.open_ports.items():
+            if 'mysql' in pi.service.lower() or port == 3306:
+                mysql_file = self.output_dir / "misc" / f"mysql_enum_{port}.txt"
+                if mysql_file.exists():
+                    try:
+                        content = mysql_file.read_text(errors='replace')
+                        if 'empty password' in content.lower() and 'root' in content.lower():
+                            findings.append(Finding(
+                                severity='CRITICAL', category='default_creds',
+                                port=port, service='MySQL',
+                                description='MySQL root has no password.',
+                                evidence='mysql-empty-password: root has empty password',
+                                next_step=f'mysql -h {self.target} -u root -P {port}',
+                            ))
+                    except Exception:
+                        pass
 
         # --- Web: gobuster interesting paths ---
         web_dir = self.output_dir / "web"
@@ -1470,13 +1525,14 @@ class EnumerationEngine:
                 gobuster_file = web_dir / f"gobuster_{port}.txt"
                 hits = parse_gobuster_results(gobuster_file)
                 interesting = [h for h in hits if h.get('interesting')]
+                proto = "https" if self._is_https(pi) else "http"
                 for hit in interesting[:10]:
                     findings.append(Finding(
                         severity='MEDIUM', category='web_discovery',
                         port=port, service='HTTP',
                         description=f"Interesting path discovered: {hit['path']} (Status {hit['status']})",
                         evidence=f"Status {hit['status']}, Size {hit['size']}",
-                        next_step=f"curl -v http://{self.target}:{port}{hit['path']}",
+                        next_step=f"curl -v {proto}://{self.target}:{port}{hit['path']}",
                     ))
 
                 # Nikto findings
@@ -1697,6 +1753,7 @@ class EnumerationEngine:
         if not self.state.is_phase_done('initial_nmap_scan'):
             self.initial_nmap_scan()
             self.state.sync_open_ports(self.open_ports)
+            self.state.sync_failed_commands(self.failed_commands)
             self.state.phase_done('initial_nmap_scan')
         else:
             self.logger.info("Resuming — skipping initial_nmap_scan (already complete)")
@@ -1705,6 +1762,7 @@ class EnumerationEngine:
         if not self.state.is_phase_done('udp_scan'):
             self.udp_scan()
             self.state.sync_open_ports(self.open_ports)
+            self.state.sync_failed_commands(self.failed_commands)
             self.state.phase_done('udp_scan')
         else:
             self.logger.info("Resuming — skipping udp_scan (already complete)")
@@ -1713,12 +1771,14 @@ class EnumerationEngine:
             # --- Phase: detailed_nmap_scans ---
             if not self.state.is_phase_done('detailed_nmap_scans'):
                 self.detailed_nmap_scans()
+                self.state.sync_failed_commands(self.failed_commands)
                 self.state.phase_done('detailed_nmap_scans')
             else:
                 self.logger.info("Resuming — skipping detailed_nmap_scans (already complete)")
 
             # --- Phase: enumerate_services ---
             self.enumerate_services()
+            self.state.sync_failed_commands(self.failed_commands)
             self.state.phase_done('enumerate_services')
 
         findings = self.generate_report()
@@ -1743,7 +1803,7 @@ def main():
 {Colors.OKGREEN}
 ╔═══════════════════════════════════════════════════════════╗
 ║                                                           ║
-║        OSCP Automated Enumeration Tool v1.7              ║
+║                    offsec-enum-ng v1.7                    ║
 ║        Comprehensive Network & Service Enumeration        ║
 ║                                                           ║
 ╚═══════════════════════════════════════════════════════════╝
@@ -1752,7 +1812,7 @@ def main():
     print(banner)
 
     parser = argparse.ArgumentParser(
-        description="Automated enumeration tool for OSCP",
+        description="offsec-enum-ng — automated enumeration for OSCP",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
