@@ -3,7 +3,7 @@
 # Run this on kali linux to install all dependencies
 
 if [[ $EUID -ne 0 ]]; then
-    echo "Run it as root"
+    echo "This must be run as root!"
     read -p "Continue anyway? (y/n) "
     echo
     if [[ ! $REPLY =~ ^[Yy]$ ]]; then
