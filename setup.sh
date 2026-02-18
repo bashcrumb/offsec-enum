@@ -15,7 +15,7 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 echo "[*] Updating package index..."
-apt update
+apt update || true
 
 # ── Core scanning & web enumeration ──────────────────────
 echo "[*] Installing core tools..."
