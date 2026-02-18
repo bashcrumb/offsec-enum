@@ -9,9 +9,9 @@ Runs a full enumeration pipeline against a target: port discovery → service de
 ## Features
 
 - **Port Scanning**: Full TCP (`-p-`), configurable port ranges, independent UDP top-100
-- **12 Service Enumerators**:
+- **14 Service Enumerators**:
   - HTTP/HTTPS — nikto, gobuster (medium wordlist + extensions), whatweb
-  - SMB — enum4linux, smbmap, smbclient, NSE scripts
+  - SMB — enum4linux-ng (JSON + text), smbmap, smbclient, NSE scripts
   - FTP — anonymous access detection
   - SSH — auth methods, host keys
   - MySQL — info, databases, empty password check
@@ -22,6 +22,8 @@ Runs a full enumeration pipeline against a target: port discovery → service de
   - NFS/RPC — rpcinfo, showmount, NSE scripts
   - SMTP — user enumeration (VRFY), commands, open relay check
   - RDP — encryption enum, NTLM info
+  - WinRM — NTLM info leak (domain/hostname/OS), auth methods (skips useless nikto/gobuster on HTTPAPI ports)
+  - Windows RPC — rpcclient null session (users, groups, domain info, shares), impacket-rpcdump endpoint mapping
 - **Vulnerability Scanning**: NSE vuln scripts on all discovered ports
 - **Concurrent Enumeration**: Parallel service scans via thread pool (configurable)
 - **Checkpoint/Resume**: Atomic state saves after each phase — `Ctrl+C` and pick up where you left off
@@ -34,7 +36,6 @@ Runs a full enumeration pipeline against a target: port discovery → service de
 ### Quick Setup
 
 ```bash
-chmod +x setup.sh
 sudo ./setup.sh
 ```
 
@@ -49,7 +50,13 @@ If you prefer to install manually:
 sudo apt install -y nmap nikto gobuster whatweb python3
 
 # SMB
-sudo apt install -y enum4linux smbmap smbclient nbtscan
+sudo apt install -y enum4linux-ng smbmap smbclient nbtscan
+
+# Windows RPC
+sudo apt install -y samba-common-bin python3-impacket
+
+# WinRM
+sudo apt install -y evil-winrm  # or: gem install evil-winrm
 
 # SNMP
 sudo apt install -y snmp onesixtyone
@@ -73,8 +80,7 @@ sudo apt install -y wordlists seclists
 ## Installation
 
 ```bash
-git clone https://github.com/mtholmquist/offsec-enum-ng && cd offsec-enum-ng
-chmod +x setup.sh
+git clone <repo-url> && cd offsec-enum-ng
 sudo ./setup.sh
 ```
 
@@ -87,7 +93,7 @@ sudo ./setup.sh
 sudo python3 offsec-enum-ng.py 10.10.10.10
 
 # Custom output directory
-sudo python3 offsec-enum-ng.py 10.10.10.10 -o ~/offsec/target1
+sudo python3 offsec-enum-ng.py 10.10.10.10 -o /root/offsec/target1
 ```
 
 ### Common Patterns
@@ -161,12 +167,19 @@ enum_results_10.10.10.10_20250217_143052/
 │   ├── gobuster_443.txt
 │   └── whatweb_443.txt
 ├── smb/
-│   ├── enum4linux.txt
+│   ├── enum4linux-ng.json
+│   ├── enum4linux-ng.txt
 │   ├── smbmap.txt
 │   ├── smbclient.txt
-│   └── nmap_smb.txt
+│   └── nmap_smb_445.txt
+├── msrpc/
+│   ├── rpcclient_null.txt
+│   └── rpcdump.txt
+├── winrm/
+│   ├── winrm_ntlm_5985.txt
+│   └── winrm_auth_5985.txt
 ├── ftp/
-│   └── ftp_enum.txt
+│   └── ftp_enum_21.txt
 ├── snmp/
 │   ├── onesixtyone.txt
 │   ├── snmpwalk_full.txt
@@ -188,10 +201,10 @@ enum_results_10.10.10.10_20250217_143052/
 │   ├── nmap_smtp.txt
 │   └── smtp_user_enum.txt
 └── misc/
-    ├── ssh_enum.txt
-    ├── mysql_enum.txt
-    ├── mssql_enum.txt
-    └── rdp_enum.txt
+    ├── ssh_enum_22.txt
+    ├── mysql_enum_3306.txt
+    ├── mssql_enum_1433.txt
+    └── rdp_enum_3389.txt
 ```
 
 ## Report
@@ -213,11 +226,13 @@ Findings the engine detects automatically:
 | CRITICAL | FTP anonymous login | `ftp 10.10.10.10` — download all files |
 | CRITICAL | MySQL root empty password | `mysql -h 10.10.10.10 -u root` |
 | HIGH | SMB writable share | `smbclient //10.10.10.10/SHARE -N` — upload shell |
-| HIGH | SMB null session | `enum4linux -a 10.10.10.10` |
+| HIGH | SMB null session | `enum4linux-ng -A 10.10.10.10` |
 | HIGH | SNMP default community | `snmpwalk -v2c -c public 10.10.10.10` |
+| HIGH | RPC null session (users enumerated) | `rpcclient -U "" -N 10.10.10.10 -c "enumdomusers"` |
 | MEDIUM | Interesting web paths | `curl -v http://10.10.10.10/admin` |
 | MEDIUM | Nikto vulnerabilities | Investigate manually |
 | MEDIUM | Enumerated SMB users | Use for password attacks |
+| INFO | WinRM available | `evil-winrm -i 10.10.10.10 -u USER -p PASS` |
 
 `REPORT.json` contains the same data in structured form for piping into other tools.
 
@@ -248,7 +263,7 @@ sudo python3 offsec-enum-ng.py 192.168.x.10 -o target1 -d megacorp.local
 sudo python3 offsec-enum-ng.py 192.168.x.10 -o target1_10.10.10.10_20250217 --resume
 ```
 
-**Priority review order**: Check `REPORT.md` critical findings first → web/ and smb/ directories → snmp/ if port 161 is open → everything else.
+**Priority review order**: Check `REPORT.md` critical findings first → web/ and smb/ directories → winrm/ if 5985 is open → msrpc/ for null session results → snmp/ if port 161 is open → everything else.
 
 ### Time-Saving Tips
 
@@ -277,7 +292,7 @@ def enumerate_redis(self, port):
         ["nmap", "-p", str(port),
          "--script=redis-info,redis-brute",
          self.target],
-        output_file=redis_dir / "nmap_redis.txt",
+        output_file=redis_dir / f"nmap_redis_{port}.txt",
         timeout=self._timeout('nmap_nse'),
     )
     if result.success:
