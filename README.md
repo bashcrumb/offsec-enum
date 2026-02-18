@@ -1,171 +1,297 @@
-# Offensive Security Enumeration Help
+# offsec-enum-ng
 
-A comprehensive automated enumeration script designed for OSCP exam efficiency. This tool automates the tedious enumeration process, allowing you to focus on exploitation.
+Automated enumeration for OSCP exam efficiency. Handles the tedious scanning and enumeration so you can focus on exploitation.
+
+## What It Does
+
+Runs a full enumeration pipeline against a target: port discovery → service detection → service-specific enumeration → actionable findings report. Everything runs concurrently where possible, checkpoints progress so you can resume if interrupted, and produces a report that tells you exactly what to try next.
 
 ## Features
 
-- **Automated Port Scanning**: Initial discovery and detailed nmap scans
-- **Service-Specific Enumeration**:
-  - HTTP/HTTPS: nikto, gobuster, whatweb
-  - SMB: enum4linux, smbmap, smbclient
-  - FTP: Anonymous access checks
-  - SSH: Auth methods, host keys
-  - MySQL/MSSQL: Database enumeration
-- **Vulnerability Scanning**: NSE vuln scripts
-- **Organized Output**: Structured directories for easy review
-- **Automatic Reporting**: Markdown summary of findings
+- **Port Scanning**: Full TCP (`-p-`), configurable port ranges, independent UDP top-100
+- **12 Service Enumerators**:
+  - HTTP/HTTPS — nikto, gobuster (medium wordlist + extensions), whatweb
+  - SMB — enum4linux, smbmap, smbclient, NSE scripts
+  - FTP — anonymous access detection
+  - SSH — auth methods, host keys
+  - MySQL — info, databases, empty password check
+  - MSSQL — info, empty password, config
+  - SNMP — community string brute force (onesixtyone), snmpwalk (full + processes + TCP ports)
+  - DNS — zone transfers (dig axfr), dnsrecon, dnsenum
+  - LDAP — base DN discovery, anonymous bind enumeration, NSE scripts
+  - NFS/RPC — rpcinfo, showmount, NSE scripts
+  - SMTP — user enumeration (VRFY), commands, open relay check
+  - RDP — encryption enum, NTLM info
+- **Vulnerability Scanning**: NSE vuln scripts on all discovered ports
+- **Concurrent Enumeration**: Parallel service scans via thread pool (configurable)
+- **Checkpoint/Resume**: Atomic state saves after each phase — `Ctrl+C` and pick up where you left off
+- **Actionable Reports**: Findings sorted by severity with copy-paste next-step commands
+- **JSON Export**: Machine-readable `REPORT.json` for custom tooling or dashboards
+- **Security Hardened**: No `shell=True`, input validation on targets and ports
 
 ## Prerequisites
 
-### Required Tools
-
-Install these tools on your Kali Linux system:
+### Quick Setup
 
 ```bash
-# Update system
-sudo apt update
-
-# Install required tools
-sudo apt install -y nmap nikto gobuster enum4linux smbmap smbclient whatweb python3
-
-# Verify installations
-which nmap nikto gobuster enum4linux smbmap whatweb
+sudo ./setup.sh
 ```
 
-### Wordlists
+This installs all dependencies and verifies them. Run it on a fresh Kali box and you're good to go.
 
-The script uses common Kali wordlists. Ensure they're installed:
+### Manual Install
+
+If you prefer to install manually:
 
 ```bash
-# Install wordlists
-sudo apt install -y wordlists
+# Core
+sudo apt install -y nmap nikto gobuster whatweb python3
 
-# Extract dirb wordlists
-sudo gunzip /usr/share/wordlists/dirb/* 2>/dev/null
+# SMB
+sudo apt install -y enum4linux smbmap smbclient nbtscan
+
+# SNMP
+sudo apt install -y snmp onesixtyone
+
+# DNS
+sudo apt install -y dnsutils dnsrecon dnsenum
+
+# LDAP
+sudo apt install -y ldap-utils
+
+# NFS/RPC
+sudo apt install -y nfs-common rpcbind
+
+# SMTP
+sudo apt install -y smtp-user-enum
+
+# Wordlists
+sudo apt install -y wordlists seclists
 ```
 
 ## Installation
 
 ```bash
-# Download the script
-chmod +x offsec_enum.py
-
-# Make it executable
-sudo ln -s $(pwd)/offsec_enum.py /usr/local/bin/offsec-enum
+git clone https://github.com/mtholmquist/offsec-enum-ng && cd offsec-enum-ng
+sudo ./setup.sh
 ```
 
 ## Usage
 
-### Basic Usage
+### Basic
 
 ```bash
-# Simple enumeration
-sudo python3 offsec_enum.py 10.10.10.10
+# Standard full enumeration
+sudo python3 offsec-enum-ng.py 10.10.10.10
 
-# With custom output directory
-sudo python3 offsec_enum.py 10.10.10.10 -o /root/offsec/target1
+# Custom output directory
+sudo python3 offsec-enum-ng.py 10.10.10.10 -o ~/offsec/target1
 ```
 
-### Advanced Options
+### Common Patterns
 
 ```bash
-# Quick mode (top 10000 ports only)
-sudo python3 offsec_enum.py 10.10.10.10 -q
+# Quick scan (top 10000 TCP, skip UDP)
+sudo python3 offsec-enum-ng.py 10.10.10.10 -q
 
-# Specific ports
-sudo python3 offsec_enum.py 10.10.10.10 -p 80,443,8080
+# Specific ports only
+sudo python3 offsec-enum-ng.py 10.10.10.10 -p 80,443,8080
 
 # Port range
-sudo python3 offsec_enum.py 10.10.10.10 -p 1-1000
+sudo python3 offsec-enum-ng.py 10.10.10.10 -p 1-1000
+
+# DNS zone transfers (requires domain name)
+sudo python3 offsec-enum-ng.py 10.10.10.10 -d megacorp.local
+
+# More threads for faster enumeration
+sudo python3 offsec-enum-ng.py 10.10.10.10 -t 5
+
+# Slow target — double all tool timeouts
+sudo python3 offsec-enum-ng.py 10.10.10.10 --timeout-multiplier 2.0
+
+# Resume after interruption
+sudo python3 offsec-enum-ng.py 10.10.10.10 -o ./enum_results_10.10.10.10_20250217 --resume
+
+# Verbose logging (DEBUG level)
+sudo python3 offsec-enum-ng.py 10.10.10.10 -v
 ```
 
 ### Full Command Reference
 
 ```
-usage: offsec_enum.py [-h] [-o OUTPUT] [-p PORTS] [-q] target
+usage: offsec-enum-ng.py [-h] [-o OUTPUT] [-p PORTS] [-q] [-v] [-t THREADS]
+                      [-d DOMAIN] [--timeout-multiplier FLOAT] [--resume]
+                      target
 
 Arguments:
-  target                Target IP address or hostname
-  
+  target                    Target IP address or hostname
+
 Options:
-  -h, --help            Show help message
-  -o, --output OUTPUT   Output directory (default: ./enum_results)
-  -p, --ports PORTS     Port range (e.g., 1-1000 or 80,443,8080)
-  -q, --quick           Quick mode (scan top 10000 ports only)
+  -h, --help                Show help message
+  -o, --output OUTPUT       Output directory (default: ./enum_results)
+  -p, --ports PORTS         Port specification (e.g., 1-1000 or 80,443,8080)
+  -q, --quick               Quick mode (top 10000 TCP ports, skip UDP)
+  -v, --verbose             Verbose output (DEBUG log level)
+  -t, --threads THREADS     Concurrent enumeration threads (default: 3)
+  -d, --domain DOMAIN       Domain name for DNS zone transfer attempts
+  --timeout-multiplier N    Scale all tool timeouts (default: 1.0)
+  --resume                  Resume from checkpoint (requires existing output dir)
 ```
 
 ## Output Structure
 
 ```
-enum_results_<target>_<timestamp>/
-├── REPORT.md                 # Summary report
-├── enum_<timestamp>.log      # Detailed log file
-├── nmap/                     # All nmap scans
+enum_results_10.10.10.10_20250217_143052/
+├── REPORT.md              # Actionable findings report
+├── REPORT.json            # Machine-readable structured data
+├── state.json             # Checkpoint file (for --resume)
+├── enum_20250217_143052.log
+├── nmap/
+│   ├── initial_scan.xml
 │   ├── initial_scan.nmap
-│   ├── vuln_scan.nmap
-│   └── udp_scan.nmap
-├── web/                      # Web enumeration
+│   ├── vuln_scan.xml
+│   └── udp_scan.xml
+├── web/
 │   ├── nikto_80.txt
 │   ├── gobuster_80.txt
-│   └── whatweb_80.txt
-├── smb/                      # SMB enumeration
+│   ├── whatweb_80.txt
+│   ├── nikto_443.txt
+│   ├── gobuster_443.txt
+│   └── whatweb_443.txt
+├── smb/
 │   ├── enum4linux.txt
 │   ├── smbmap.txt
-│   └── smbclient.txt
-├── ftp/                      # FTP enumeration
+│   ├── smbclient.txt
+│   └── nmap_smb.txt
+├── ftp/
 │   └── ftp_enum.txt
-└── misc/                     # Other services
+├── snmp/
+│   ├── onesixtyone.txt
+│   ├── snmpwalk_full.txt
+│   ├── snmpwalk_processes.txt
+│   └── snmpwalk_tcp_ports.txt
+├── dns/
+│   ├── dig_axfr.txt
+│   ├── dnsrecon.txt
+│   └── dnsenum.txt
+├── ldap/
+│   ├── ldapsearch_base.txt
+│   ├── ldapsearch_full.txt
+│   └── nmap_ldap.txt
+├── nfs/
+│   ├── rpcinfo.txt
+│   ├── showmount.txt
+│   └── nmap_nfs.txt
+├── smtp/
+│   ├── nmap_smtp.txt
+│   └── smtp_user_enum.txt
+└── misc/
     ├── ssh_enum.txt
-    └── mysql_enum.txt
+    ├── mysql_enum.txt
+    ├── mssql_enum.txt
+    └── rdp_enum.txt
 ```
+
+## Report
+
+The generated `REPORT.md` includes:
+
+1. **Executive Summary** — target, duration, port count, findings by severity
+2. **Critical & High Findings** — each with evidence and an exact next-step command
+3. **Service Details** — port table with product/version info
+4. **Web Discovery** — gobuster interesting hits + nikto findings
+5. **Other Findings** — medium/low/info items
+6. **Enumeration Coverage** — completed tasks, failed/timed-out commands
+7. **Raw Data Index** — every output file with sizes
+
+Findings the engine detects automatically:
+
+| Severity | Finding | Example Next Step |
+|----------|---------|-------------------|
+| CRITICAL | FTP anonymous login | `ftp 10.10.10.10` — download all files |
+| CRITICAL | MySQL root empty password | `mysql -h 10.10.10.10 -u root` |
+| HIGH | SMB writable share | `smbclient //10.10.10.10/SHARE -N` — upload shell |
+| HIGH | SMB null session | `enum4linux -a 10.10.10.10` |
+| HIGH | SNMP default community | `snmpwalk -v2c -c public 10.10.10.10` |
+| MEDIUM | Interesting web paths | `curl -v http://10.10.10.10/admin` |
+| MEDIUM | Nikto vulnerabilities | Investigate manually |
+| MEDIUM | Enumerated SMB users | Use for password attacks |
+
+`REPORT.json` contains the same data in structured form for piping into other tools.
 
 ## OSCP Exam Workflow
 
 ### Before the Exam
 
-1. **Test the script** on HTB/PG machines
-2. **Customize** service enumeration based on your preferences
-3. **Verify** all tools are installed and working
-4. **Create aliases** for quick access
+1. Run `setup.sh` on your Kali VM
+2. Test on HTB/Proving Grounds boxes
+3. Practice the resume workflow — start a scan, `Ctrl+C`, `--resume`
+4. Get familiar with the report format so you know where to look
 
 ### During the Exam
 
-1. **Start enumeration immediately** on all targets:
-   ```bash
-   sudo python3 offsec_enum.py 192.168.x.10 -o target1 &
-   sudo python3 offsec_enum.py 192.168.x.11 -o target2 &
-   sudo python3 offsec_enum.py 192.168.x.12 -o target3 &
-   ```
+```bash
+# Fire off all targets immediately
+sudo python3 offsec-enum-ng.py 192.168.x.10 -o target1 &
+sudo python3 offsec-enum-ng.py 192.168.x.11 -o target2 &
+sudo python3 offsec-enum-ng.py 192.168.x.12 -o target3 &
 
-2. **Review results** as they complete
-3. **Focus on exploitation** while scans run in background
-4. **Check REPORT.md** for quick overview
+# If a scan is too slow, kill and restart with quick mode
+sudo python3 offsec-enum-ng.py 192.168.x.10 -o target1_quick -q
+
+# If you need DNS zone transfers
+sudo python3 offsec-enum-ng.py 192.168.x.10 -o target1 -d megacorp.local
+
+# Interrupted? Resume without re-running completed phases
+sudo python3 offsec-enum-ng.py 192.168.x.10 -o target1_10.10.10.10_20250217 --resume
+```
+
+**Priority review order**: Check `REPORT.md` critical findings first → web/ and smb/ directories → snmp/ if port 161 is open → everything else.
 
 ### Time-Saving Tips
 
-- Run enumeration on all targets simultaneously
-- Start with quick mode (-q) if time-limited
-- Review web/smb directories first (common vectors)
-- Keep the script running while you manually exploit
+- Run all targets in parallel from the start
+- Open `REPORT.md` as soon as enumeration finishes — critical findings are at the top
+- Use `-q` for a fast first pass, then full scan if you need more coverage
+- The `--resume` flag means `Ctrl+C` is never wasted work
+- `REPORT.json` can be parsed with `jq` for quick filtering:
+  ```bash
+  jq '.findings[] | select(.severity == "CRITICAL")' REPORT.json
+  ```
 
 ## Customization
 
-### Add Custom Enumeration
+### Add a Custom Enumerator
 
-Edit the `enumerate_services()` method to add your own tools:
+Add a method to `EnumerationEngine` and register it in `_classify_port()`:
 
 ```python
-def enumerate_custom(self, port):
-    """Your custom enumeration"""
-    self.log(f"Running custom enum on port {port}...", "INFO")
-    output = self.output_dir / "custom" / f"custom_{port}.txt"
-    cmd = f"your-tool -target {self.target} -port {port}"
-    self.run_command(cmd, output, timeout=300)
+def enumerate_redis(self, port):
+    """Enumerate Redis."""
+    self.logger.info("Enumerating Redis on port %d...", port)
+    redis_dir = self._ensure_output_dir("redis")
+
+    result = self.run_command(
+        ["nmap", "-p", str(port),
+         "--script=redis-info,redis-brute",
+         self.target],
+        output_file=redis_dir / "nmap_redis.txt",
+        timeout=self._timeout('nmap_nse'),
+    )
+    if result.success:
+        self.logger.success("Redis enumeration complete (%.1fs)", result.duration)
 ```
 
-### Modify Wordlists
+Then add a match clause to `_classify_port()`:
 
-Change the wordlist path in `enumerate_http()`:
+```python
+if 'redis' in service or port == 6379:
+    tasks.append((self.enumerate_redis, port))
+```
+
+### Change Wordlists
+
+Edit the `wordlist` variable in `enumerate_http()`:
 
 ```python
 wordlist = "/usr/share/wordlists/your-custom-list.txt"
@@ -173,58 +299,51 @@ wordlist = "/usr/share/wordlists/your-custom-list.txt"
 
 ### Adjust Timeouts
 
-Modify timeout values for longer/shorter scans:
+Use the CLI multiplier for global scaling, or edit `TIMEOUT_DEFAULTS` for per-tool control:
 
 ```python
-self.run_command(command, timeout=600)  # 10 minutes
+TIMEOUT_DEFAULTS = {
+    'gobuster': 3600,   # increase for huge wordlists
+    'nikto': 900,       # more time for thorough scans
+    ...
+}
 ```
 
 ## Troubleshooting
 
-### Permission Errors
-
-Some scans require root:
+**Permission errors** — most scans need root for raw sockets:
 ```bash
-sudo python3 offsec_enum.py <target>
+sudo python3 offsec-enum-ng.py <target>
 ```
 
-### Missing Tools
-
-Install missing dependencies:
+**Missing tools** — re-run setup or install individually:
 ```bash
+sudo ./setup.sh
+# or
 sudo apt install -y <tool-name>
 ```
 
-### Slow Scans
-
-Use quick mode or specify ports:
+**Slow scans** — use quick mode or scale timeouts:
 ```bash
-sudo python3 offsec_enum.py 10.10.10.10 -q
-sudo python3 offsec_enum.py 10.10.10.10 -p 1-1000
+sudo python3 offsec-enum-ng.py 10.10.10.10 -q
+sudo python3 offsec-enum-ng.py 10.10.10.10 --timeout-multiplier 0.5
 ```
 
-## Exam-Specific Notes
+**Resume not working** — `--resume` needs the exact output directory path (the timestamped one):
+```bash
+sudo python3 offsec-enum-ng.py 10.10.10.10 -o enum_results_10.10.10.10_20250217_143052 --resume
+```
 
-- **Don't rely solely on automation**: Always do manual verification
-- **Check results regularly**: Automated tools can miss things
-- **Understand the tools**: Know what each command does
-- **Document manually**: Screenshots and notes are still required
-- **Test thoroughly**: Practice on HTB/PG before the exam
+## Exam Compliance
 
-## Legal Disclaimer
-
-This tool is for authorized penetration testing and educational purposes only (like OSCP exam). Never use against systems you don't have explicit permission to test.
-
-## OSCP Exam Compliance
-
-- No automated exploitation (enumeration only)
+- Enumeration only — no automated exploitation
 - No Metasploit auto-exploit modules
-- Manual verification required
-- Screenshots needed for report
+- Manual verification still required
+- Screenshots and notes are your responsibility
 
-## Credits
+## Legal
 
-Created for OSCP exam preparation. Good luck on your certification!
+Authorized penetration testing and education only. Never run against systems you don't have explicit permission to test.
 
 ## License
 
