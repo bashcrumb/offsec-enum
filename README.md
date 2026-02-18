@@ -34,6 +34,7 @@ Runs a full enumeration pipeline against a target: port discovery → service de
 ### Quick Setup
 
 ```bash
+chmod +x setup.sh
 sudo ./setup.sh
 ```
 
@@ -73,6 +74,7 @@ sudo apt install -y wordlists seclists
 
 ```bash
 git clone https://github.com/mtholmquist/offsec-enum-ng && cd offsec-enum-ng
+chmod +x setup.sh
 sudo ./setup.sh
 ```
 
