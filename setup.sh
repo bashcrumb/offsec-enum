@@ -26,7 +26,17 @@ apt install -y \
 # ── SMB / NetBIOS ────────────────────────────────────────
 echo "[*] Installing SMB tools..."
 apt install -y \
-    enum4linux smbmap smbclient nbtscan
+    enum4linux-ng smbmap smbclient nbtscan
+
+# ── Windows RPC ──────────────────────────────────────────
+echo "[*] Installing Windows RPC tools..."
+apt install -y \
+    samba-common-bin python3-impacket
+
+# ── WinRM ────────────────────────────────────────────────
+echo "[*] Installing WinRM tools..."
+apt install -y \
+    evil-winrm 2>/dev/null || echo "    evil-winrm not in repos — install via gem: gem install evil-winrm"
 
 # ── SNMP ─────────────────────────────────────────────────
 echo "[*] Installing SNMP tools..."
@@ -70,7 +80,9 @@ echo "[*] Verifying tool installations..."
 
 tools=(
     nmap nikto gobuster whatweb
-    enum4linux smbmap smbclient nbtscan
+    enum4linux-ng smbmap smbclient nbtscan
+    rpcclient impacket-rpcdump
+    evil-winrm
     onesixtyone snmpwalk
     dig dnsrecon dnsenum
     ldapsearch
